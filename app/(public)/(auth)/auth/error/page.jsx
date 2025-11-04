@@ -1,9 +1,9 @@
 'use client';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 
-export default function AuthErrorPage() {
+const AuthErrorComponent = () => {
   const searchParams = useSearchParams();
   const [error, setError] = useState('');
 
@@ -28,6 +28,7 @@ export default function AuthErrorPage() {
   };
 
   return (
+    
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
@@ -63,4 +64,12 @@ export default function AuthErrorPage() {
       </div>
     </div>
   );
+}
+
+export default function AuthError() {
+    return (
+        <Suspense fallback={<div>Loading...</div>}>
+            <AuthErrorComponent />
+        </Suspense>
+    );
 }
