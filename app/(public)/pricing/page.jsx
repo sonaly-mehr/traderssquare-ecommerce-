@@ -16,7 +16,7 @@ export default function PricingPage() {
       name: 'Monthly',
       price: '$19.99',
       period: 'per month',
-      priceId: process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID,
+      priceId: process.env.STRIPE_MONTHLY_PRICE_ID,
       features: [
         'Free shipping on all orders',
         'Exclusive member discounts',
@@ -32,7 +32,7 @@ export default function PricingPage() {
       period: 'per year',
       originalPrice: '$239.88',
       savings: 'Save 2 months',
-      priceId: process.env.NEXT_PUBLIC_STRIPE_YEARLY_PRICE_ID,
+      priceId: process.env.STRIPE_YEARLY_PRICE_ID,
       features: [
         'Everything in Monthly plan',
         '2 months free compared to monthly',
