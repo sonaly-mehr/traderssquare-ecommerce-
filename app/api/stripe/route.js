@@ -35,43 +35,44 @@ export async function POST(request) {
 
     console.log(`🪝 Processing webhook event: ${event.type}`);
 
-    // Handle subscription events
+    // Handle different event types
     switch (event.type) {
+      // ==================== SUBSCRIPTION EVENTS ====================
       case "checkout.session.completed":
         const session = event.data.object;
-
-        // Handle subscription checkout completion
         if (session.mode === "subscription") {
-          await handleSubscriptionSession(session);
+          await handleSubscriptionCheckoutCompleted(session);
+        } else if (session.mode === "payment") {
+          await handleOneTimePaymentCheckoutCompleted(session);
         }
-        // Handle one-time payment checkout completion
-        else if (session.mode === "payment") {
-          await handlePaymentSession(session);
-        }
+        break;
+
+      case "customer.subscription.created":
+        await handleSubscriptionCreated(event.data.object);
         break;
 
       case "customer.subscription.updated":
-        const updatedSubscription = event.data.object;
-        await handleSubscriptionUpdate(updatedSubscription);
+        await handleSubscriptionUpdated(event.data.object);
         break;
 
       case "customer.subscription.deleted":
-        const canceledSubscription = event.data.object;
-        await handleSubscriptionCancellation(canceledSubscription);
+        await handleSubscriptionDeleted(event.data.object);
         break;
 
       case "invoice.payment_succeeded":
         const invoice = event.data.object;
         if (invoice.subscription) {
-          await handleSuccessfulInvoice(invoice);
+          await handleSubscriptionInvoicePaid(invoice);
         }
         break;
 
-      case "invoice.payment_failed":
-        const failedInvoice = event.data.object;
-        if (failedInvoice.subscription) {
-          await handleFailedInvoice(failedInvoice);
-        }
+      // ==================== ONE-TIME PAYMENT EVENTS ====================
+      case "payment_intent.succeeded":
+        await handleOneTimePaymentSucceeded(event.data.object);
+        break;
+
+      case "payment_intent.payment_failed":
+        await handleOneTimePaymentFailed(event.data.object);
         break;
 
       default:
@@ -85,87 +86,160 @@ export async function POST(request) {
   }
 }
 
-// Handle subscription checkout completion
-// Handle subscription checkout completion
-async function handleSubscriptionSession(session) {
+// ==================== SUBSCRIPTION HANDLERS ====================
+
+async function handleSubscriptionCheckoutCompleted(session) {
   try {
-    console.log("Processing subscription session:", session.id);
-    console.log("Session customer:", session.customer);
-    console.log("Session metadata:", session.metadata);
-
-    // Get the subscription details to check its status
-    const subscription = await stripe.subscriptions.retrieve(
-      session.subscription
-    );
-
-    let user = null;
-
-    // Try to find user by metadata userId first (most reliable)
-    if (session.metadata && session.metadata.userId) {
-      user = await prisma.user.findUnique({
-        where: { id: session.metadata.userId },
-      });
-      console.log("Found user by metadata userId:", user?.id);
+    console.log("🔔 Handling subscription checkout completed:", session.id);
+    
+    // Get subscription details
+    const subscription = await stripe.subscriptions.retrieve(session.subscription);
+    
+    // Find user by metadata (most reliable)
+    const userId = session.metadata?.userId;
+    if (!userId) {
+      console.error("No user ID in session metadata");
+      return;
     }
 
-    // If not found, try by Stripe customer ID
-    if (!user && session.customer) {
-      user = await prisma.user.findFirst({
-        where: { stripeCustomerId: session.customer },
-      });
-      console.log("Found user by stripeCustomerId:", user?.id);
-    }
-
-    // If still not found, try by email from customer details
-    if (!user && session.customer_details && session.customer_details.email) {
-      user = await prisma.user.findFirst({
-        where: { email: session.customer_details.email },
-      });
-      console.log("Found user by email:", user?.id);
-    }
+    const user = await prisma.user.findUnique({
+      where: { id: userId }
+    });
 
     if (!user) {
-      console.error("User not found for session:", session.id);
-      console.error("Available data:", {
-        metadataUserId: session.metadata?.userId,
-        customerId: session.customer,
-        email: session.customer_details?.email
-      });
-      throw new Error(`User not found for session: ${session.id}`);
+      console.error("User not found for ID:", userId);
+      return;
     }
 
-    // Update user with Stripe customer ID if not set
-    if (session.customer && !user.stripeCustomerId) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { stripeCustomerId: session.customer },
-      });
-      console.log("Updated user with stripeCustomerId:", session.customer);
-    }
-
-    // Activate Plus membership
+    // Update user with subscription details
     await prisma.user.update({
       where: { id: user.id },
       data: {
         isPlusMember: true,
         subscriptionId: session.subscription,
         subscriptionStatus: subscription.status,
-      },
+        stripeCustomerId: session.customer // Ensure this is set
+      }
     });
 
-    console.log(`✅ Plus membership activated for user: ${user.email}`);
-    console.log(`Subscription ID: ${session.subscription}`);
-    console.log(`Subscription Status: ${subscription.status}`);
+    console.log(`✅ Subscription activated for user: ${user.email}`);
+    console.log(`   Subscription ID: ${session.subscription}`);
+    console.log(`   Status: ${subscription.status}`);
     
   } catch (error) {
-    console.error("Error handling subscription session:", error);
-    throw error;
+    console.error("Error handling subscription checkout:", error);
   }
 }
 
-// Handle one-time payment sessions
-async function handlePaymentSession(session) {
+async function handleSubscriptionCreated(subscription) {
   try {
+    console.log("🔔 Handling subscription created:", subscription.id);
+    
+    const user = await prisma.user.findFirst({
+      where: { 
+        OR: [
+          { stripeCustomerId: subscription.customer },
+          { subscriptionId: subscription.id }
+        ]
+      }
+    });
+
+    if (user) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          isPlusMember: subscription.status === 'active',
+          subscriptionId: subscription.id,
+          subscriptionStatus: subscription.status
+        }
+      });
+      console.log(`✅ Subscription created for user: ${user.email}`);
+    }
+  } catch (error) {
+    console.error("Error handling subscription creation:", error);
+  }
+}
+
+async function handleSubscriptionUpdated(subscription) {
+  try {
+    console.log("🔔 Handling subscription updated:", subscription.id);
+    
+    const user = await prisma.user.findFirst({
+      where: { 
+        OR: [
+          { stripeCustomerId: subscription.customer },
+          { subscriptionId: subscription.id }
+        ]
+      }
+    });
+
+    if (user) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          isPlusMember: subscription.status === 'active',
+          subscriptionStatus: subscription.status
+        }
+      });
+      console.log(`📝 Subscription updated for user: ${user.email}, status: ${subscription.status}`);
+    }
+  } catch (error) {
+    console.error("Error handling subscription update:", error);
+  }
+}
+
+async function handleSubscriptionDeleted(subscription) {
+  try {
+    console.log("🔔 Handling subscription deleted:", subscription.id);
+    
+    const user = await prisma.user.findFirst({
+      where: { 
+        OR: [
+          { stripeCustomerId: subscription.customer },
+          { subscriptionId: subscription.id }
+        ]
+      }
+    });
+
+    if (user) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          isPlusMember: false,
+          subscriptionStatus: 'canceled',
+          subscriptionId: null
+        }
+      });
+      console.log(`❌ Subscription canceled for user: ${user.email}`);
+    }
+  } catch (error) {
+    console.error("Error handling subscription deletion:", error);
+  }
+}
+
+async function handleSubscriptionInvoicePaid(invoice) {
+  try {
+    console.log("🔔 Handling subscription invoice paid:", invoice.id);
+    
+    const user = await prisma.user.findFirst({
+      where: { stripeCustomerId: invoice.customer }
+    });
+
+    if (user) {
+      console.log(`💰 Subscription invoice paid for user: ${user.email}`);
+      // You can add additional logic here for successful subscription renewals
+    }
+  } catch (error) {
+    console.error("Error handling subscription invoice:", error);
+  }
+}
+
+// ==================== ONE-TIME PAYMENT HANDLERS ====================
+
+async function handleOneTimePaymentCheckoutCompleted(session) {
+  try {
+    console.log("💳 Handling one-time payment checkout completed:", session.id);
+    
     const { orderIds, userId, appId } = session.metadata || {};
 
     if (appId !== "traderssquare") {
@@ -194,104 +268,28 @@ async function handlePaymentSession(session) {
         data: { cart: {} },
       });
 
-      console.log(
-        `✅ Payment processed for ${orderIdsArray.length} orders for user: ${userId}`
-      );
+      console.log(`✅ One-time payment processed for ${orderIdsArray.length} orders for user: ${userId}`);
     }
   } catch (error) {
-    console.error("Error handling payment session:", error);
-    throw error;
+    console.error("Error handling one-time payment checkout:", error);
   }
 }
 
-// Handle subscription updates
-async function handleSubscriptionUpdate(subscription) {
+async function handleOneTimePaymentSucceeded(paymentIntent) {
   try {
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { stripeCustomerId: subscription.customer },
-          { subscriptionId: subscription.id },
-        ],
-      },
-    });
-
-    if (user) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          subscriptionStatus: subscription.status,
-          isPlusMember:
-            subscription.status === "active" ||
-            subscription.status === "trialing",
-        },
-      });
-      console.log(
-        `📝 Subscription updated for user: ${user.email}, status: ${subscription.status}`
-      );
-    }
+    console.log("💳 Handling one-time payment succeeded:", paymentIntent.id);
+    // Add your one-time payment success logic here
   } catch (error) {
-    console.error("Error updating subscription:", error);
+    console.error("Error handling one-time payment success:", error);
   }
 }
 
-// Handle subscription cancellation
-async function handleSubscriptionCancellation(subscription) {
+async function handleOneTimePaymentFailed(paymentIntent) {
   try {
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { stripeCustomerId: subscription.customer },
-          { subscriptionId: subscription.id },
-        ],
-      },
-    });
-
-    if (user) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          isPlusMember: false,
-          subscriptionStatus: "canceled",
-          subscriptionId: null,
-        },
-      });
-      console.log(`❌ Plus membership canceled for user: ${user.email}`);
-    }
+    console.log("💳 Handling one-time payment failed:", paymentIntent.id);
+    // Add your one-time payment failure logic here
   } catch (error) {
-    console.error("Error canceling subscription:", error);
-  }
-}
-
-// Handle successful invoice payments
-async function handleSuccessfulInvoice(invoice) {
-  try {
-    const user = await prisma.user.findFirst({
-      where: { stripeCustomerId: invoice.customer },
-    });
-
-    if (user) {
-      console.log(`💰 Invoice paid for user: ${user.email}`);
-      // You can add additional logic here for successful payments
-    }
-  } catch (error) {
-    console.error("Error handling successful invoice:", error);
-  }
-}
-
-// Handle failed invoice payments
-async function handleFailedInvoice(invoice) {
-  try {
-    const user = await prisma.user.findFirst({
-      where: { stripeCustomerId: invoice.customer },
-    });
-
-    if (user) {
-      console.log(`❌ Invoice payment failed for user: ${user.email}`);
-      // You might want to send an email notification here
-    }
-  } catch (error) {
-    console.error("Error handling failed invoice:", error);
+    console.error("Error handling one-time payment failure:", error);
   }
 }
 
