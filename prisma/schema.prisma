@@ -64,6 +64,7 @@ model User {
   isPlusMember  Boolean   @default(false)
   stripeCustomerId String? @map("stripe_customer_id")
   subscriptionId String? @map("subscription_id")
+  subscriptionStatus String?   @map("subscription_status")
   
 
   // Relations

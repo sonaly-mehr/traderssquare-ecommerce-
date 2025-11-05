@@ -1,7 +1,9 @@
-import { authOptions } from "@/lib/auth";
-import { getServerSession } from "next-auth";
+
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import prisma from "@/lib/prisma"; 
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -21,6 +23,10 @@ export async function POST(request) {
       where: { id: userId },
       select: { email: true, stripeCustomerId: true },
     });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
 
     let customerId = user.stripeCustomerId;
 

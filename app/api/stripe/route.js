@@ -86,29 +86,52 @@ export async function POST(request) {
 }
 
 // Handle subscription checkout completion
+// Handle subscription checkout completion
 async function handleSubscriptionSession(session) {
   try {
     console.log("Processing subscription session:", session.id);
+    console.log("Session customer:", session.customer);
+    console.log("Session metadata:", session.metadata);
 
     // Get the subscription details to check its status
     const subscription = await stripe.subscriptions.retrieve(
       session.subscription
     );
 
-    // Find or create customer relationship
-    let user = await prisma.user.findFirst({
-      where: { email: session.customer_email },
-    });
+    let user = null;
 
+    // Try to find user by metadata userId first (most reliable)
+    if (session.metadata && session.metadata.userId) {
+      user = await prisma.user.findUnique({
+        where: { id: session.metadata.userId },
+      });
+      console.log("Found user by metadata userId:", user?.id);
+    }
+
+    // If not found, try by Stripe customer ID
     if (!user && session.customer) {
       user = await prisma.user.findFirst({
         where: { stripeCustomerId: session.customer },
       });
+      console.log("Found user by stripeCustomerId:", user?.id);
+    }
+
+    // If still not found, try by email from customer details
+    if (!user && session.customer_details && session.customer_details.email) {
+      user = await prisma.user.findFirst({
+        where: { email: session.customer_details.email },
+      });
+      console.log("Found user by email:", user?.id);
     }
 
     if (!user) {
       console.error("User not found for session:", session.id);
-      throw new Error(`User not found for email: ${session.customer_email}`);
+      console.error("Available data:", {
+        metadataUserId: session.metadata?.userId,
+        customerId: session.customer,
+        email: session.customer_details?.email
+      });
+      throw new Error(`User not found for session: ${session.id}`);
     }
 
     // Update user with Stripe customer ID if not set
@@ -117,6 +140,7 @@ async function handleSubscriptionSession(session) {
         where: { id: user.id },
         data: { stripeCustomerId: session.customer },
       });
+      console.log("Updated user with stripeCustomerId:", session.customer);
     }
 
     // Activate Plus membership
@@ -130,6 +154,9 @@ async function handleSubscriptionSession(session) {
     });
 
     console.log(`✅ Plus membership activated for user: ${user.email}`);
+    console.log(`Subscription ID: ${session.subscription}`);
+    console.log(`Subscription Status: ${subscription.status}`);
+    
   } catch (error) {
     console.error("Error handling subscription session:", error);
     throw error;
